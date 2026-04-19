@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Suivi Production - Scan Multi-Étapes</title>
+    <!-- Bibliothèques nécessaires -->
+    <script src="https://unpkg.com/@zxing/library@latest"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .step-active { border-color: #3b82f6; background-color: #eff6ff; color: #1d4ed8; }
+        .step-done { border-color: #10b981; background-color: #ecfdf5; color: #047857; }
+        #video-container { position: relative; width: 100%; max-width: 400px; border-radius: 1rem; overflow: hidden; background: #000; display: none; margin-left: auto; margin-right: auto; }
+        #video { width: 100%; height: auto; display: block; }
+        .scan-overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 80%; height: 50%; border: 2px solid #3b82f6; box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.5); pointer-events: none; }
+        .scan-line { position: absolute; top: 0; left: 0; width: 100%; height: 2px; background: #ef4444; animation: scan 2s linear infinite; }
+        @keyframes scan { 0% { top: 0; } 100% { top: 100%; } }
+        /* Empêcher le zoom auto sur iPhone */
+        input, button { font-size: 16px !important; }
+        .tab-active { background-color: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1); color: #1e293b; }
+    </style>
+</head>
+<body class="bg-slate-50 min-h-screen pb-20">
+
+    <div class="max-w-4xl mx-auto p-4 space-y-6">
+        <!-- Header -->
+        <header class="flex justify-between items-center bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-200">
+            <div>
+                <h1 class="text-lg md:text-xl font-bold text-slate-800">Traçabilité Production</h1>
+                <p id="user-status" class="text-[10px] text-slate-500 italic font-medium uppercase tracking-tight">Mode Local (Prêt)</p>
+            </div>
+            <div class="flex bg-slate-100 p-1 rounded-lg">
+                <button onclick="switchTab('scan')" id="tab-scan" class="px-3 py-1.5 text-xs font-semibold rounded-md tab-active">Scanner</button>
+                <button onclick="switchTab('history')" id="tab-history" class="px-3 py-1.5 text-xs font-semibold rounded-md text-slate-500">Historique</button>
+            </div>
+        </header>
+
+        <!-- SECTION SCAN -->
+        <div id="section-scan" class="space-y-6">
+            <!-- Machine Selection -->
+            <section class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                <h2 class="text-xs font-bold text-slate-400 mb-4 uppercase tracking-widest">1. Choisir la Machine</h2>
+                <div class="grid grid-cols-3 md:grid-cols-5 gap-2">
+                    <button onclick="setMachine('LAR2')" class="m-btn p-3 text-xs font-bold border rounded-xl" data-m="LAR2">LAR2</button>
+                    <button onclick="setMachine('LAC2')" class="m-btn p-3 text-xs font-bold border rounded-xl" data-m="LAC2">LAC2</button>
+                    <button onclick="setMachine('LAR3')" class="m-btn p-3 text-xs font-bold border rounded-xl" data-m="LAR3">LAR3</button>
+                    <button onclick="setMachine('LAR5')" class="m-btn p-3 text-xs font-bold border rounded-xl" data-m="LAR5">LAR5</button>
+                    <button onclick="setMachine('LAR6')" class="m-btn p-3 text-xs font-bold border rounded-xl" data-m="LAR6">LAR6</button>
+                </div>
+            </section>
+
+            <!-- Étapes de Scan -->
+            <section class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                <h2 class="text-xs font-bold text-slate-400 mb-4 uppercase tracking-widest">2. Flux de Traçabilité</h2>
+                
+                <div class="flex flex-col md:flex-row gap-3 mb-6">
+                    <div id="step1" class="flex-1 p-3 border-2 rounded-xl text-center transition-all bg-white">
+                        <span class="block text-[9px] uppercase font-bold opacity-60">Étape 1</span>
+                        <span class="text-sm font-bold">Composant</span>
+                        <p id="val1" class="text-xs mt-1 truncate font-mono text-blue-600">-</p>
+                    </div>
+                    <div id="step2" class="flex-1 p-3 border-2 rounded-xl text-center transition-all bg-white">
+                        <span class="block text-[9px] uppercase font-bold opacity-60">Étape 2</span>
+                        <span class="text-sm font-bold">Référence</span>
+                        <p id="val2" class="text-xs mt-1 truncate font-mono text-blue-600">-</p>
+                    </div>
+                    <div id="step3" class="flex-1 p-3 border-2 rounded-xl text-center transition-all bg-white">
+                        <span class="block text-[9px] uppercase font-bold opacity-60">Étape 3</span>
+                        <span class="text-sm font-bold">N° Série</span>
+                        <p id="val3" class="text-xs mt-1 truncate font-mono text-blue-600">-</p>
+                    </div>
+                </div>
+
+                <div class="flex flex-col items-center">
+                    <!-- Scanner -->
+                    <div id="video-container" class="mb-6">
+                        <video id="video"></video>
+                        <div class="scan-overlay"><div class="scan-line"></div></div>
+                    </div>
+                    
+                    <div class="w-full max-w-xs space-y-3">
+                        <button id="btn-action" onclick="toggleCamera()" class="w-full bg-blue-600 text-white py-4 rounded-xl font-bold shadow-lg active:scale-95 transition-transform">
+                            Démarrer le Scanner
+                        </button>
+                        
+                        <div class="flex gap-2">
+                            <button onclick="manualInput()" class="flex-1 text-slate-500 text-[10px] py-2 border rounded-lg bg-slate-50">Saisie Manuelle</button>
+                            <button onclick="resetCurrentFlow()" class="flex-1 text-red-400 text-[10px] py-2 border rounded-lg bg-red-50">Réinitialiser</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- SECTION HISTORIQUE -->
+        <div id="section-history" class="hidden space-y-6">
+            <section class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                <div class="flex flex-col gap-3 mb-6">
+                    <label class="text-[10px] font-bold text-slate-400 uppercase">Filtres</label>
+                    <input type="date" id="filter-date" onchange="renderHistory()" class="p-3 border rounded-xl bg-slate-50 text-sm">
+                    <input type="text" id="filter-comp" oninput="renderHistory()" placeholder="Nom du composant..." class="p-3 border rounded-xl bg-slate-50 text-sm">
+                </div>
+
+                <div class="overflow-hidden rounded-xl border border-slate-100">
+                    <table class="w-full text-left">
+                        <thead class="bg-slate-50">
+                            <tr class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                                <th class="p-3">Info</th>
+                                <th class="p-3">Détails Scan</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-rows" class="text-xs divide-y divide-slate-50">
+                            <!-- Données -->
+                        </tbody>
+                    </table>
+                </div>
+                <button onclick="clearHistory()" class="mt-4 text-[10px] text-red-300 hover:text-red-500 uppercase font-bold">Effacer l'historique local</button>
+            </section>
+        </div>
+    </div>
+
+    <!-- Notification -->
+    <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-800 text-white px-6 py-3 rounded-full opacity-0 transition-all z-50 shadow-2xl pointer-events-none text-center text-xs"></div>
+
+    <script>
+        // Variables
+        let currentStep = 1; 
+        let scanData = { machine: 'LAR2', component: '', reference: '', serial: '' };
+        let codeReader = null;
+        let isCameraRunning = false;
+        let history = JSON.parse(localStorage.getItem('prod_scans') || '[]');
+
+        window.onload = () => {
+            setMachine('LAR2');
+            updateStepUI();
+            renderHistory();
+        };
+
+        function switchTab(tab) {
+            document.getElementById('section-scan').classList.toggle('hidden', tab !== 'scan');
+            document.getElementById('section-history').classList.toggle('hidden', tab !== 'history');
+            
+            document.getElementById('tab-scan').classList.toggle('tab-active', tab === 'scan');
+            document.getElementById('tab-scan').classList.toggle('text-slate-500', tab !== 'scan');
+            document.getElementById('tab-history').classList.toggle('tab-active', tab === 'history');
+            document.getElementById('tab-history').classList.toggle('text-slate-500', tab !== 'history');
+            
+            if(isCameraRunning && tab === 'history') toggleCamera();
+        }
+
+        function setMachine(name) {
+            scanData.machine = name;
+            document.querySelectorAll('.m-btn').forEach(b => {
+                const isActive = b.dataset.m === name;
+                if(isActive) {
+                    b.classList.add('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
+                } else {
+                    b.classList.remove('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
+                    b.classList.add('bg-white', 'text-slate-600', 'border-slate-200');
+                }
+            });
+        }
+
+        async function toggleCamera() {
+            const container = document.getElementById('video-container');
+            const btn = document.getElementById('btn-action');
+
+            if (isCameraRunning) {
+                stopScanner();
+            } else {
+                startScanner();
+            }
+        }
+
+        function startScanner() {
+            const container = document.getElementById('video-container');
+            const btn = document.getElementById('btn-action');
+            
+            try {
+                codeReader = new ZXing.BrowserMultiFormatReader();
+                container.style.display = 'block';
+                btn.innerText = "Arrêter la Caméra";
+                btn.classList.replace('bg-blue-600', 'bg-slate-200');
+                btn.classList.replace('text-white', 'text-slate-700');
+                isCameraRunning = true;
+
+                codeReader.decodeFromVideoDevice(undefined, 'video', (result, err) => {
+                    if (result) {
+                        handleScanResult(result.text);
+                    }
+                });
+            } catch (e) {
+                console.error(e);
+                alert("Erreur Caméra : Utilisez HTTPS (lien GitHub/Netlify) et autorisez l'accès à la caméra.");
+            }
+        }
+
+        function stopScanner() {
+            const container = document.getElementById('video-container');
+            const btn = document.getElementById('btn-action');
+            if(codeReader) codeReader.reset();
+            container.style.display = 'none';
+            btn.innerText = "Démarrer le Scanner";
+            btn.classList.replace('bg-slate-200', 'bg-blue-600');
+            btn.classList.replace('text-slate-700', 'text-white');
+            isCameraRunning = false;
+        }
+
+        function manualInput() {
+            const labels = ["Nom du composant", "Référence", "Numéro de série"];
+            const text = prompt(`Saisir manuellement : ${labels[currentStep-1]}`);
+            if (text) handleScanResult(text);
+        }
+
+        function handleScanResult(text) {
+            if (currentStep === 1) {
+                scanData.component = text;
+                document.getElementById('val1').innerText = text;
+                currentStep = 2;
+                showToast("✅ Étape 1 OK");
+            } else if (currentStep === 2) {
+                scanData.reference = text;
+                document.getElementById('val2').innerText = text;
+                currentStep = 3;
+                showToast("✅ Étape 2 OK");
+            } else if (currentStep === 3) {
+                scanData.serial = text;
+                document.getElementById('val3').innerText = text;
+                saveData();
+            }
+            updateStepUI();
+            if (navigator.vibrate) navigator.vibrate(100);
+        }
+
+        function saveData() {
+            const now = new Date();
+            const entry = {
+                ...scanData,
+                time: now.toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit'}),
+                date: now.toISOString().split('T')[0],
+                timestamp: Date.now()
+            };
+
+            history.unshift(entry);
+            localStorage.setItem('prod_scans', JSON.stringify(history));
+            
+            showToast("🎉 Cycle enregistré !");
+            renderHistory();
+            setTimeout(resetCurrentFlow, 1000);
+        }
+
+        function resetCurrentFlow() {
+            currentStep = 1;
+            scanData.component = '';
+            scanData.reference = '';
+            scanData.serial = '';
+            document.getElementById('val1').innerText = '-';
+            document.getElementById('val2').innerText = '-';
+            document.getElementById('val3').innerText = '-';
+            updateStepUI();
+        }
+
+        function updateStepUI() {
+            for(let i=1; i<=3; i++) {
+                const el = document.getElementById(`step${i}`);
+                if (currentStep === i) {
+                    el.className = "flex-1 p-3 border-2 rounded-xl text-center transition-all step-active scale-105 shadow-sm";
+                } else if (currentStep > i) {
+                    el.className = "flex-1 p-3 border-2 rounded-xl text-center transition-all step-done opacity-80";
+                } else {
+                    el.className = "flex-1 p-3 border-2 border-slate-100 rounded-xl text-center transition-all opacity-40";
+                }
+            }
+        }
+
+        function renderHistory() {
+            const dateFilter = document.getElementById('filter-date').value;
+            const compFilter = document.getElementById('filter-comp').value.toLowerCase();
+            const body = document.getElementById('history-rows');
+
+            const filtered = history.filter(item => {
+                const matchDate = dateFilter ? item.date === dateFilter : true;
+                const matchComp = compFilter ? item.component.toLowerCase().includes(compFilter) : true;
+                return matchDate && matchComp;
+            });
+
+            body.innerHTML = filtered.map(item => `
+                <tr class="hover:bg-slate-50 transition-colors">
+                    <td class="p-3 align-top">
+                        <div class="font-bold text-slate-800">${item.time}</div>
+                        <div class="inline-block px-2 py-0.5 rounded bg-blue-600 text-white font-bold text-[9px] mt-1">${item.machine}</div>
+                    </td>
+                    <td class="p-3">
+                        <div class="font-bold text-slate-700 text-sm">${item.component}</div>
+                        <div class="text-[10px] text-slate-400 mt-1">
+                            <span class="font-semibold text-slate-500">REF:</span> ${item.reference}<br>
+                            <span class="font-semibold text-slate-500">S/N:</span> ${item.serial}
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+
+            if(filtered.length === 0) {
+                body.innerHTML = '<tr><td colspan="2" class="p-10 text-center text-slate-400 italic">Aucun scan trouvé</td></tr>';
+            }
+        }
+
+        function clearHistory() {
+            if(confirm("Effacer tout l'historique sur cet appareil ?")) {
+                history = [];
+                localStorage.removeItem('prod_scans');
+                renderHistory();
+            }
+        }
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.innerText = msg;
+            t.style.opacity = '1';
+            setTimeout(() => t.style.opacity = '0', 2500);
+        }
+    </script>
+</body>
+</html>
